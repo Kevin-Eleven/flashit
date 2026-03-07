@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import toast from "react-hot-toast";
@@ -10,26 +10,38 @@ import {
   FileText,
   X,
   ArrowLeft,
-  CheckCircle,
   Download,
+  Copy,
+  Users,
+  WifiOff,
+  RefreshCw,
+  Clock,
 } from "lucide-react";
 import { getSocket, disconnectSocket } from "@/utils/socket";
 import { createPeer, getPeer, destroyPeer } from "@/utils/peer";
+
+type ConnectionStatus = "waiting" | "connecting" | "connected" | "disconnected";
 
 export default function ShareClient({ roomId }: { roomId: string }) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const [dragOver, setDragOver] = useState(false);
-  // const [files, setFiles] = useState<UploadedFile[]>([]);
-  // const [filesToSend, setFilesToSend] = useState<File[] | null>([]);
   const [files, setFiles] = useState<File[]>([]);
-  const [connected, setConnected] = useState(false);
+  const [connectionStatus, setConnectionStatus] =
+    useState<ConnectionStatus>("waiting");
   const [gotFile, setGotFile] = useState(false);
   const [receivedFileName, setReceivedFileName] = useState("");
   const [sending, setSending] = useState(false);
   const [messages, setMessages] = useState<TextMessage[]>([]);
   const [messageText, setMessageText] = useState("");
+
+  const isConnected = connectionStatus === "connected";
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   useEffect(() => {
     const worker = new Worker("/worker.js");
@@ -38,32 +50,37 @@ export default function ShareClient({ roomId }: { roomId: string }) {
     const existingPeer = getPeer();
 
     if (existingPeer) {
-      // Came from /send or /receive — peer already connected
-      setConnected(true);
+      setConnectionStatus("connected");
       attachDataHandler(existingPeer, worker);
     } else {
-      // Direct link visit — need to join room and do signaling
       const socket = getSocket();
       socket.emit("join room", roomId);
 
       socket.on("all users", (users: string[]) => {
-        if (users.length > 0) {
-          const peer = createPeer(true);
-
-          peer.on("signal", (signal: any) => {
-            socket.emit("sending signal", {
-              userToSignal: users[0],
-              callerID: socket.id,
-              signal,
-            });
-          });
-
-          peer.on("connect", () => setConnected(true));
-          attachDataHandler(peer, worker);
+        if (users.length === 0) {
+          setConnectionStatus("waiting");
+          return;
         }
+
+        setConnectionStatus("connecting");
+        const peer = createPeer(true);
+
+        peer.on("signal", (signal: any) => {
+          socket.emit("sending signal", {
+            userToSignal: users[0],
+            callerID: socket.id,
+            signal,
+          });
+        });
+
+        peer.on("connect", () => setConnectionStatus("connected"));
+        peer.on("error", () => handlePeerError());
+        peer.on("close", () => handlePeerClose());
+        attachDataHandler(peer, worker);
       });
 
       socket.on("user joined", (payload: any) => {
+        setConnectionStatus("connecting");
         const peer = createPeer(false);
 
         peer.on("signal", (signal: any) => {
@@ -73,7 +90,9 @@ export default function ShareClient({ roomId }: { roomId: string }) {
           });
         });
 
-        peer.on("connect", () => setConnected(true));
+        peer.on("connect", () => setConnectionStatus("connected"));
+        peer.on("error", () => handlePeerError());
+        peer.on("close", () => handlePeerClose());
         attachDataHandler(peer, worker);
         peer.signal(payload.signal);
       });
@@ -86,6 +105,9 @@ export default function ShareClient({ roomId }: { roomId: string }) {
         toast.error("Room is full");
         router.push("/");
       });
+
+      socket.on("user left", () => handlePeerClose());
+      socket.on("disconnect", () => setConnectionStatus("disconnected"));
     }
 
     return () => {
@@ -95,52 +117,18 @@ export default function ShareClient({ roomId }: { roomId: string }) {
     };
   }, []);
 
-  // function attachDataHandler(peer: any, worker: Worker) {
-  //   peer.on("data", (data: any) => {
-  //     const str = data.toString();
-  //     if (str.includes("done")) {
-  //       const parsed = JSON.parse(str);
-  //       setReceivedFileName(parsed.fileName);
-  //       setGotFile(true);
-  //     } else {
-  //       worker.postMessage(data);
-  //     }
-  //   });
-  // }
+  function handlePeerError() {
+    setConnectionStatus("disconnected");
+    destroyPeer();
+  }
 
-  // function attachDataHandler(peer: any, worker: Worker) {
-  //   peer.on("data", (data: any) => {
-  //     // Control messages are always sent as strings, binary chunks are ArrayBuffer/Buffer
-  //     if (typeof data === "string" || data instanceof Uint8Array === false) {
-  //       try {
-  //         const parsed = JSON.parse(data.toString());
-  //         if (parsed.done) {
-  //           setReceivedFileName(parsed.fileName);
-  //           setGotFile(true);
-  //         } else if (parsed.type === "text") {
-  //           // setMessages((prev) => [
-  //           //   ...prev,
-  //           //   {
-  //           //     id: crypto.randomUUID(),
-  //           //     text: parsed.text,
-  //           //     timestamp: new Date().toLocaleTimeString(),
-  //           //     fromMe: false,
-  //           //   },
-  //           // ]);
-  //         }
-  //       } catch {
-  //         // JSON parse failed — treat as binary chunk
-  //         worker.postMessage(data);
-  //       }
-  //     } else {
-  //       // It's a binary chunk — send directly to worker
-  //       worker.postMessage(data);
-  //     }
-  //   });
-  // }
+  function handlePeerClose() {
+    setConnectionStatus("disconnected");
+    destroyPeer();
+  }
+
   function attachDataHandler(peer: any, worker: Worker) {
     peer.on("data", (data: any) => {
-      // simple-peer always delivers Buffer — try to parse as JSON control message first
       const str =
         typeof data === "string" ? data : new TextDecoder().decode(data);
       try {
@@ -162,27 +150,13 @@ export default function ShareClient({ roomId }: { roomId: string }) {
           ]);
         }
       } catch {
-        // Not JSON — it's a binary chunk
+        // binary chunk
       }
       worker.postMessage(data);
     });
   }
 
   function handleDownload() {
-    // setGotFile(false);
-    // const worker = workerRef.current;
-    // if (!worker) return;
-
-    // worker.postMessage("download");
-    // worker.addEventListener(
-    //   "message",
-    //   (event) => {
-    //     const stream = event.data.stream();
-    //     const fileStream = streamSaver.createWriteStream(receivedFileName);
-    //     stream.pipeTo(fileStream);
-    //   },
-    //   { once: true },
-    // );
     setGotFile(false);
     const worker = workerRef.current;
     if (!worker) return;
@@ -197,53 +171,29 @@ export default function ShareClient({ roomId }: { roomId: string }) {
         a.href = url;
         a.download = receivedFileName;
         a.click();
-        // URL.revokeObjectURL(url);
-        setTimeout(() => URL.revokeObjectURL(url), 10000); // ← revoke after delay
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
       },
       { once: true },
     );
   }
 
-  // function sendFile(file: File) {
-  //   const peer = getPeer();
-  //   if (!peer) return;
-
-  //   setSending(true);
-  //   const stream = file.stream();
-  //   const reader = stream.getReader();
-
-  //   function handleReading(done: boolean, value?: Uint8Array) {
-  //     if (done) {
-  //       peer.write(JSON.stringify({ done: true, fileName: file.name }));
-  //       setSending(false);
-  //       toast.success(`Sent ${file.name}`);
-  //       return;
-  //     }
-  //     peer.write(value);
-  //     reader.read().then(({ done, value }) => handleReading(done, value));
-  //   }
-
-  //   reader.read().then(({ done, value }) => handleReading(done, value));
-  // }
   async function sendFile(file: File) {
     const peer = getPeer();
     if (!peer) return;
 
-    const MAX_SIZE = 2 * 1024 * 1024 * 1024; // 2GB
+    const MAX_SIZE = 1 * 1024 * 1024 * 1024;
     if (file.size > MAX_SIZE) {
-      toast.error("File too large. Maximum size is 2GB.");
+      toast.error("File too large. Maximum size is 1GB.");
       return;
     }
 
     setSending(true);
 
-    const CHUNK_SIZE = 64 * 1024; // 64KB
-    const BUFFER_THRESHOLD = 1 * 1024 * 1024; // 1MB
-
+    const CHUNK_SIZE = 64 * 1024;
+    const BUFFER_THRESHOLD = 1 * 1024 * 1024;
     let offset = 0;
 
     while (offset < file.size) {
-      // Pause if buffer is too full
       if (peer._channel.bufferedAmount >= BUFFER_THRESHOLD) {
         await new Promise<void>((resolve) => {
           const interval = setInterval(() => {
@@ -261,9 +211,6 @@ export default function ShareClient({ roomId }: { roomId: string }) {
       offset += CHUNK_SIZE;
     }
 
-    // At end of sendFile, change:
-    // peer.write(JSON.stringify({ done: true, fileName: file.name }));
-    // To:
     peer.send(JSON.stringify({ done: true, fileName: file.name }));
     setSending(false);
     toast.success(`Sent ${file.name}`);
@@ -272,17 +219,15 @@ export default function ShareClient({ roomId }: { roomId: string }) {
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     e.preventDefault();
     const selectedFiles = e.target.files;
-    if (selectedFiles) {
+    if (selectedFiles)
       setFiles((prev) => [...prev, ...Array.from(selectedFiles)]);
-    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    if (e.dataTransfer.files) {
+    if (e.dataTransfer.files)
       setFiles((prev) => [...prev, ...Array.from(e.dataTransfer.files)]);
-    }
   };
 
   const removeFile = (index: number) => {
@@ -292,12 +237,10 @@ export default function ShareClient({ roomId }: { roomId: string }) {
   const handleSendMessage = () => {
     const text = messageText.trim();
     if (!text) return;
-
     const peer = getPeer();
     if (!peer) return;
 
     peer.write(JSON.stringify({ type: "text", text }));
-
     setMessages((prev) => [
       ...prev,
       {
@@ -308,6 +251,112 @@ export default function ShareClient({ roomId }: { roomId: string }) {
       },
     ]);
     setMessageText("");
+  };
+
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text);
+    toast.success("Copied to clipboard!");
+  };
+
+  const statusConfig = {
+    waiting: { color: "bg-amber-400", label: "Waiting for someone..." },
+    connecting: { color: "bg-blue-400 animate-pulse", label: "Connecting..." },
+    connected: { color: "bg-green-500", label: "Connected" },
+    disconnected: { color: "bg-red-500", label: "Disconnected" },
+  }[connectionStatus];
+
+  const renderOverlay = () => {
+    if (connectionStatus === "waiting") {
+      return (
+        <motion.div
+          key="waiting"
+          initial={{ opacity: 0, scale: 0.97 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.97 }}
+          className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl bg-card/95 backdrop-blur-sm border border-border gap-5 p-8 text-center"
+        >
+          {/* Pulsing ring */}
+          <div className="relative flex items-center justify-center">
+            <span className="absolute w-16 h-16 rounded-full bg-amber-400/20 animate-ping" />
+            <div className="w-14 h-14 rounded-full bg-amber-400/10 border border-amber-400/30 flex items-center justify-center">
+              <Users className="w-6 h-6 text-amber-400" />
+            </div>
+          </div>
+          <div>
+            <p className="text-foreground font-medium text-lg mb-1">
+              Waiting for someone to join
+            </p>
+            <p className="text-muted-foreground text-sm">
+              Share this room link with the other person. This page will update
+              automatically when they connect.
+            </p>
+          </div>
+          {/* Copyable room link */}
+          <div className="flex items-center gap-2 bg-muted/50 border border-border rounded-full px-4 py-2">
+            <Clock className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+            <span className="text-xs text-muted-foreground font-mono truncate max-w-[180px]">
+              {roomId}
+            </span>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(window.location.href);
+                toast.success("Room link copied!");
+              }}
+              className="ml-1 text-muted-foreground hover:text-foreground transition-colors shrink-0"
+              title="Copy room link"
+            >
+              <Copy className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </motion.div>
+      );
+    }
+
+    if (connectionStatus === "disconnected") {
+      return (
+        <motion.div
+          key="disconnected"
+          initial={{ opacity: 0, scale: 0.97 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.97 }}
+          className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl bg-card/95 backdrop-blur-sm border border-red-500/20 gap-5 p-8 text-center"
+        >
+          <div className="w-14 h-14 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center">
+            <WifiOff className="w-6 h-6 text-red-400" />
+          </div>
+          <div>
+            <p className="text-foreground font-medium text-lg mb-1">
+              Connection lost
+            </p>
+            <p className="text-muted-foreground text-sm">
+              The other person disconnected or left the room. Your transferred
+              files and messages are still visible.
+            </p>
+          </div>
+          <div className="flex gap-3">
+            <motion.button
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+              onClick={() => router.push("/")}
+              className="px-5 py-2.5 rounded-full border border-border text-muted-foreground hover:text-foreground text-sm transition-colors"
+            >
+              Go home
+            </motion.button>
+            <motion.button
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+              onClick={() => window.location.reload()}
+              className="px-5 py-2.5 rounded-full bg-primary text-primary-foreground text-sm flex items-center gap-2"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Rejoin room
+            </motion.button>
+          </div>
+        </motion.div>
+      );
+    }
+
+    return null;
   };
 
   return (
@@ -335,36 +384,39 @@ export default function ShareClient({ roomId }: { roomId: string }) {
           transition={{ delay: 0.2 }}
           className="flex items-center gap-2"
         >
-          <div className="w-2.5 h-2.5 rounded-full bg-green-500" />
+          <div className={`w-2.5 h-2.5 rounded-full ${statusConfig.color}`} />
           <span className="text-[0.875rem] text-muted-foreground">
-            {connected ? "Connected" : "Connecting..."}
+            {statusConfig.label}
           </span>
         </motion.div>
       </div>
 
       {/* Received file download prompt */}
-      {gotFile && (
-        <motion.div
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="max-w-6xl mx-auto w-full mb-6 bg-card rounded-2xl p-5 border border-border flex items-center justify-between"
-        >
-          <div className="flex items-center gap-3">
-            <Download className="w-5 h-5 text-primary" />
-            <span className="text-foreground">
-              Received file: <strong>{receivedFileName}</strong>
-            </span>
-          </div>
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={handleDownload}
-            className="px-5 py-2.5 bg-primary text-primary-foreground rounded-full text-[0.875rem] cursor-pointer"
+      <AnimatePresence>
+        {gotFile && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="max-w-6xl mx-auto w-full mb-6 bg-card rounded-2xl p-5 border border-border flex items-center justify-between"
           >
-            Download
-          </motion.button>
-        </motion.div>
-      )}
+            <div className="flex items-center gap-3">
+              <Download className="w-5 h-5 text-primary" />
+              <span className="text-foreground">
+                Received: <strong>{receivedFileName}</strong>
+              </span>
+            </div>
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={handleDownload}
+              className="px-5 py-2.5 bg-primary text-primary-foreground rounded-full text-[0.875rem] cursor-pointer"
+            >
+              Download
+            </motion.button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Main Content */}
       <div className="flex-1 max-w-6xl mx-auto w-full grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -377,19 +429,19 @@ export default function ShareClient({ roomId }: { roomId: string }) {
         >
           <h3 className="text-foreground mb-4">File Sharing</h3>
 
-          {/* Drop Zone */}
           <div
             onDragOver={(e) => {
               e.preventDefault();
-              setDragOver(true);
+              if (isConnected) setDragOver(true);
             }}
             onDragLeave={() => setDragOver(false)}
             onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => isConnected && fileInputRef.current?.click()}
             className={`
-              flex flex-col items-center justify-center p-12 rounded-2xl border-2 border-dashed cursor-pointer transition-all duration-300
+              flex flex-col items-center justify-center p-12 rounded-2xl border-2 border-dashed transition-all duration-300
+              ${!isConnected ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}
               ${
-                dragOver
+                dragOver && isConnected
                   ? "border-primary bg-primary/5 scale-[1.02]"
                   : "border-border bg-card hover:border-primary/40 hover:bg-card/80"
               }
@@ -416,7 +468,6 @@ export default function ShareClient({ roomId }: { roomId: string }) {
             />
           </div>
 
-          {/* File List */}
           <div className="mt-4 space-y-3 flex-1 overflow-y-auto max-h-[300px]">
             <AnimatePresence>
               {files.map((file, index) => (
@@ -442,7 +493,7 @@ export default function ShareClient({ roomId }: { roomId: string }) {
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
                     onClick={() => sendFile(file)}
-                    disabled={!connected || sending}
+                    disabled={!isConnected || sending}
                     className="px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-[0.75rem] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     Send
@@ -468,9 +519,12 @@ export default function ShareClient({ roomId }: { roomId: string }) {
         >
           <h3 className="text-foreground mb-4">Text Sharing</h3>
 
-          {/* Messages Area */}
-          <div className="bg-card rounded-2xl border border-border shadow-sm shadow-black/5 flex-1 flex flex-col min-h-[300px] lg:min-h-0">
-            <div className="flex-1 p-5 overflow-y-auto space-y-3">
+          <div className="relative bg-card rounded-2xl border border-border shadow-sm shadow-black/5 flex flex-col h-[420px] lg:h-[500px]">
+            {/* Waiting / Disconnected overlay */}
+            <AnimatePresence>{renderOverlay()}</AnimatePresence>
+
+            {/* Scrollable message list */}
+            <div className="flex-1 p-5 overflow-y-auto space-y-3 min-h-0">
               {messages.length === 0 ? (
                 <div className="flex items-center justify-center h-full text-muted-foreground text-[0.875rem]">
                   No messages yet. Start typing below.
@@ -482,30 +536,54 @@ export default function ShareClient({ roomId }: { roomId: string }) {
                       key={msg.id}
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className={`flex ${msg.fromSelf ? "justify-end" : "justify-start"}`}
+                      className={`flex items-end gap-1.5 ${msg.fromSelf ? "justify-end" : "justify-start"}`}
                     >
-                      <div
-                        className={`${
-                          msg.fromSelf
-                            ? "bg-primary/10 rounded-2xl rounded-br-md"
-                            : "bg-muted rounded-2xl rounded-bl-md"
-                        } px-4 py-3 max-w-[85%]`}
-                      >
-                        <p className="text-[0.9375rem] text-foreground break-words">
-                          {msg.text}
-                        </p>
-                        <p className="text-[0.6875rem] text-muted-foreground mt-1 text-right">
-                          {msg.timestamp}
-                        </p>
-                      </div>
+                      {!msg.fromSelf && (
+                        <div className="bg-emerald-500/[0.12] border border-emerald-500/20 rounded-2xl rounded-bl-sm px-4 py-2.5 max-w-[78%] group relative">
+                          <p className="text-[0.9375rem] text-foreground break-words leading-relaxed">
+                            {msg.text}
+                          </p>
+                          <p className="text-[0.6563rem] text-emerald-400/60 mt-1">
+                            {msg.timestamp}
+                          </p>
+                          <motion.button
+                            whileHover={{ scale: 1.1 }}
+                            whileTap={{ scale: 0.9 }}
+                            onClick={() => handleCopy(msg.text)}
+                            className="absolute -right-2 -top-2 p-1 rounded-full bg-card border border-border text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                          >
+                            <Copy className="w-3 h-3" />
+                          </motion.button>
+                        </div>
+                      )}
+
+                      {msg.fromSelf && (
+                        <div className="bg-indigo-500/[0.15] border border-indigo-500/25 rounded-2xl rounded-br-sm px-4 py-2.5 max-w-[78%] group relative">
+                          <p className="text-[0.9375rem] text-foreground break-words leading-relaxed">
+                            {msg.text}
+                          </p>
+                          <p className="text-[0.6563rem] text-indigo-400/60 mt-1 text-right">
+                            You · {msg.timestamp}
+                          </p>
+                          <motion.button
+                            whileHover={{ scale: 1.1 }}
+                            whileTap={{ scale: 0.9 }}
+                            onClick={() => handleCopy(msg.text)}
+                            className="absolute -left-2 -top-2 p-1 rounded-full bg-card border border-border text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                          >
+                            <Copy className="w-3 h-3" />
+                          </motion.button>
+                        </div>
+                      )}
                     </motion.div>
                   ))}
                 </AnimatePresence>
               )}
+              <div ref={messagesEndRef} />
             </div>
 
-            {/* Input Area */}
-            <div className="p-4 border-t border-border">
+            {/* Input */}
+            <div className="p-4 border-t border-border shrink-0">
               <div className="flex gap-3">
                 <textarea
                   value={messageText}
@@ -516,15 +594,24 @@ export default function ShareClient({ roomId }: { roomId: string }) {
                       handleSendMessage();
                     }
                   }}
-                  placeholder="Type your message..."
+                  disabled={!isConnected}
+                  placeholder={
+                    connectionStatus === "waiting"
+                      ? "Waiting for someone to join..."
+                      : connectionStatus === "disconnected"
+                        ? "Connection lost"
+                        : connectionStatus === "connecting"
+                          ? "Connecting..."
+                          : "Type your message... (Enter to send)"
+                  }
                   rows={2}
-                  className="flex-1 bg-background rounded-xl px-4 py-3 text-[0.9375rem] text-foreground placeholder:text-muted-foreground resize-none outline-none border border-border focus:border-primary/40 transition-colors"
+                  className="flex-1 bg-background rounded-xl px-4 py-3 text-[0.9375rem] text-foreground placeholder:text-muted-foreground resize-none outline-none border border-border focus:border-primary/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 />
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   onClick={handleSendMessage}
-                  disabled={!messageText.trim()}
+                  disabled={!messageText.trim() || !isConnected}
                   className="self-end px-5 py-3 bg-primary text-primary-foreground rounded-xl cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
                 >
                   <Send className="w-5 h-5" />

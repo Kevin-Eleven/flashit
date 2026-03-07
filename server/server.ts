@@ -64,9 +64,14 @@ io.on("connection", (socket) => {
     let room = roomIdToSockets[roomID];
     if (room) {
       room = room.filter((id) => id !== socket.id);
-      roomIdToSockets[roomID] = room;
-      socket.broadcast.emit("user left", socket.id);
+      if (room.length === 0) {
+        delete roomIdToSockets[roomID];
+      } else {
+        roomIdToSockets[roomID] = room;
+      }
+      socket.to(roomID).emit("user left", socket.id);
     }
+    delete socketToRoomId[socket.id];
   });
 });
 
