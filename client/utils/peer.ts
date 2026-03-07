@@ -1,15 +1,29 @@
-import Peer, { SimplePeer } from "simple-peer";
+import Peer from "simple-peer";
 
-// Private to this module — nobody outside can touch this directly
-let peer: any = null;
+let peer: Peer.Instance | null = null;
 
-export function createPeer(initiator: boolean): any {
+export function createPeer(initiator: boolean): Peer.Instance {
   if (peer) peer.destroy();
-  peer = new Peer({ initiator, trickle: false });
+
+  const iceServers: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+
+  if (process.env.NEXT_PUBLIC_TURN_URL) {
+    iceServers.push({
+      urls: process.env.NEXT_PUBLIC_TURN_URL,
+      username: process.env.NEXT_PUBLIC_TURN_USER || "",
+      credential: process.env.NEXT_PUBLIC_TURN_CRED || "",
+    });
+  }
+
+  peer = new Peer({
+    initiator,
+    trickle: false,
+    config: { iceServers },
+  });
   return peer;
 }
 
-export function getPeer(): any {
+export function getPeer(): Peer.Instance | null {
   return peer;
 }
 

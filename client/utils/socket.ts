@@ -6,7 +6,9 @@ let socket: Socket | null = null;
 
 export function getSocket(): Socket {
   if (!socket) {
-    socket = io("http://localhost:8000");
+    socket = io(
+      process.env.NEXT_PUBLIC_SIGNALING_URL || "http://localhost:8000",
+    );
   }
   return socket;
 }

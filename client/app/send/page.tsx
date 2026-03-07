@@ -10,14 +10,13 @@ import { createPeer } from "@/utils/peer";
 
 function page() {
   const [roomId, setRoomId] = useState<string>("");
-  const shareLink = `localhost:3000/share/${roomId}`;
   const [copied, setCopied] = useState(false);
   const router = useRouter();
 
   const peerRef = useRef<any>(null);
   const callerIDRef = useRef<string>("");
   useEffect(() => {
-    const id = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const id = crypto.randomUUID().substring(0, 6).toUpperCase();
     setRoomId(id);
 
     const socket = getSocket();
@@ -40,12 +39,12 @@ function page() {
     });
 
     return () => {
-      // Don't disconnect socket — the peer connection and signaling state
-      // need to survive the navigation to /share/[roomId]
+      socket.off("user joined");
     };
   }, []);
 
   const handleCopy = () => {
+    const shareLink = `${window.location.origin}/share/${roomId}`;
     toast.success("Link copied to clipboard!");
     navigator.clipboard.writeText(shareLink);
     setCopied(true);
@@ -140,7 +139,9 @@ function page() {
           className="bg-card rounded-2xl p-5 shadow-md shadow-black/5 border border-border w-full flex items-center gap-3"
         >
           <p className="flex-1 text-[0.875rem] text-muted-foreground truncate text-left">
-            {shareLink}
+            {typeof window !== "undefined"
+              ? `${window.location.origin}/share/${roomId}`
+              : `/share/${roomId}`}
           </p>
           <motion.button
             whileHover={{ scale: 1.05 }}

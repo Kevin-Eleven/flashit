@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { navigate } from "next/dist/client/components/segment-cache/navigation";
 import { getSocket, disconnectSocket } from "@/utils/socket";
 import { createPeer, getPeer } from "@/utils/peer";
 import toast from "react-hot-toast";
@@ -56,6 +55,15 @@ function page() {
       setJoining(false);
     });
   }
+
+  useEffect(() => {
+    return () => {
+      const socket = getSocket();
+      socket.off("all users");
+      socket.off("receiving returned signal");
+      socket.off("room full");
+    };
+  }, []);
 
   return (
     <motion.div

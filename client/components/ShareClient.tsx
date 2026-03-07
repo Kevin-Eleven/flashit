@@ -33,7 +33,10 @@ export default function ShareClient({ roomId }: { roomId: string }) {
     useState<ConnectionStatus>("waiting");
   const [gotFile, setGotFile] = useState(false);
   const [receivedFileName, setReceivedFileName] = useState("");
-  const [sending, setSending] = useState(false);
+
+  const [fileProgress, setFileProgress] = useState<Record<number, number>>({});
+
+  const abortRef = useRef<AbortController | null>(null);
   const [messages, setMessages] = useState<TextMessage[]>([]);
   const [messageText, setMessageText] = useState("");
 
@@ -177,7 +180,7 @@ export default function ShareClient({ roomId }: { roomId: string }) {
     );
   }
 
-  async function sendFile(file: File) {
+  async function sendFile(file: File, index: number) {
     const peer = getPeer();
     if (!peer) return;
 
@@ -187,33 +190,63 @@ export default function ShareClient({ roomId }: { roomId: string }) {
       return;
     }
 
-    setSending(true);
+    const abort = new AbortController();
+    abortRef.current = abort;
+
+    setFileProgress((prev) => ({ ...prev, [index]: 0 }));
 
     const CHUNK_SIZE = 64 * 1024;
     const BUFFER_THRESHOLD = 1 * 1024 * 1024;
     let offset = 0;
 
-    while (offset < file.size) {
-      if (peer._channel.bufferedAmount >= BUFFER_THRESHOLD) {
-        await new Promise<void>((resolve) => {
-          const interval = setInterval(() => {
-            if (peer._channel.bufferedAmount < BUFFER_THRESHOLD) {
-              clearInterval(interval);
+    try {
+      while (offset < file.size) {
+        if (abort.signal.aborted) {
+          toast("Transfer cancelled");
+          break;
+        }
+
+        const channel = (peer as any)._channel as RTCDataChannel;
+        if (channel.bufferedAmount >= BUFFER_THRESHOLD) {
+          await new Promise<void>((resolve, reject) => {
+            channel.bufferedAmountLowThreshold = BUFFER_THRESHOLD / 2;
+            channel.onbufferedamountlow = () => {
+              channel.onbufferedamountlow = null;
               resolve();
-            }
-          }, 50);
-        });
+            };
+            abort.signal.addEventListener(
+              "abort",
+              () => reject(new Error("cancelled")),
+              { once: true },
+            );
+          });
+        }
+
+        const slice = file.slice(offset, offset + CHUNK_SIZE);
+        const buffer = await slice.arrayBuffer();
+        peer.write(Buffer.from(buffer));
+        offset += CHUNK_SIZE;
+        // setSendProgress(Math.min(100, Math.round((offset / file.size) * 100)));
+        setFileProgress((prev) => ({
+          ...prev,
+          [index]: Math.min(100, Math.round((offset / file.size) * 100)),
+        }));
       }
 
-      const slice = file.slice(offset, offset + CHUNK_SIZE);
-      const buffer = await slice.arrayBuffer();
-      peer.write(Buffer.from(buffer));
-      offset += CHUNK_SIZE;
+      if (!abort.signal.aborted) {
+        peer.send(JSON.stringify({ done: true, fileName: file.name }));
+        toast.success(`Sent ${file.name}`);
+      }
+    } catch {
+      // cancelled or error
+    } finally {
+      setFileProgress((prev) => {
+        const next = { ...prev };
+        delete next[index];
+        return next;
+      });
+      abortRef.current = null;
     }
-
-    peer.send(JSON.stringify({ done: true, fileName: file.name }));
-    setSending(false);
-    toast.success(`Sent ${file.name}`);
   }
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -457,7 +490,7 @@ export default function ShareClient({ roomId }: { roomId: string }) {
               Drag files here or click to upload
             </p>
             <p className="text-[0.875rem] text-muted-foreground">
-              Any file type, up to 100MB
+              Any file type, up to 1GB
             </p>
             <input
               ref={fileInputRef}
@@ -492,11 +525,22 @@ export default function ShareClient({ roomId }: { roomId: string }) {
                   <motion.button
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
-                    onClick={() => sendFile(file)}
-                    disabled={!isConnected || sending}
+                    onClick={() => {
+                      if (
+                        fileProgress[index] !== undefined &&
+                        abortRef.current
+                      ) {
+                        abortRef.current.abort();
+                      } else {
+                        sendFile(file, index); // pass index here
+                      }
+                    }}
+                    disabled={!isConnected}
                     className="px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-[0.75rem] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    Send
+                    {fileProgress[index] !== undefined
+                      ? `${fileProgress[index]}%`
+                      : "Send"}
                   </motion.button>
                   <button
                     onClick={() => removeFile(index)}
