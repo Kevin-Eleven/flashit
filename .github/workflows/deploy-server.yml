@@ -11,10 +11,10 @@ on:
 
 # ── Environment variables used across all jobs ──
 env:
-  ACR_NAME: flashitacr # Your Azure Container Registry name
-  IMAGE_NAME: flashit-server # Docker image name
-  RESOURCE_GROUP: flashit-rg # Azure Resource Group
-  CONTAINER_APP: flashit-server # Azure Container App name
+  ACR_NAME: p2pbackend # Your Azure Container Registry name
+  IMAGE_NAME: p2p-backend # Docker image name
+  RESOURCE_GROUP: flashit-backend # Azure Resource Group
+  CONTAINER_APP: p2p-backend # Azure Container App name
 
 jobs:
   build-and-deploy:
