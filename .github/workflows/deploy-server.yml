@@ -1,0 +1,71 @@
+name: Build & Deploy Server
+
+# ── When does this run? ──
+# Every push to main that changes files inside server/
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/**"
+  workflow_dispatch: # Manual trigger button in GitHub Actions UI
+
+# ── Environment variables used across all jobs ──
+env:
+  ACR_NAME: flashitacr # Your Azure Container Registry name
+  IMAGE_NAME: flashit-server # Docker image name
+  RESOURCE_GROUP: flashit-rg # Azure Resource Group
+  CONTAINER_APP: flashit-server # Azure Container App name
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Step 1: Check out your code ──
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── Step 2: Log in to Azure using a Service Principal ──
+      # The AZURE_CREDENTIALS secret contains a JSON blob with your
+      # service principal's appId, password, and tenant.
+      # You create this once with:
+      #   az ad sp create-for-rbac --name "flashit-gh-actions" \
+      #     --role contributor --scopes /subscriptions/<SUB_ID>/resourceGroups/flashit-rg \
+      #     --sdk-auth
+      # Then paste the JSON output into GitHub → Settings → Secrets → AZURE_CREDENTIALS
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # ── Step 3: Log in to Azure Container Registry ──
+      # ACR is where your Docker image gets stored.
+      # This step authenticates Docker so it can push to flashitacr.azurecr.io
+      - name: Log in to ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      # ── Step 4: Build the Docker image ──
+      # Uses the Dockerfile inside server/
+      # Tags it with the short git commit SHA so every deployment is traceable
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            -t ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest \
+            ./server
+
+      # ── Step 5: Push the image to ACR ──
+      - name: Push to ACR
+        run: |
+          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+
+      # ── Step 6: Deploy to Azure Container Apps ──
+      # Updates the container app to use the new image.
+      # Container Apps handles rolling deployment — zero downtime.
+      - name: Deploy to Container Apps
+        run: |
+          az containerapp update \
+            --name ${{ env.CONTAINER_APP }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
