@@ -13,12 +13,24 @@ const io = new Server(server, {
   },
 });
 
+// Allow the client origin to read these routes cross-origin.
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
+  next();
+});
+
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     rooms: Object.keys(roomIdToSockets).length,
     connections: io.engine.clientsCount,
   });
+});
+
+// Lets the receiver check a code points at a live room before joining.
+app.get("/room/:roomId", (req, res) => {
+  const sockets = roomIdToSockets[req.params.roomId];
+  res.json({ exists: Array.isArray(sockets) && sockets.length > 0 });
 });
 
 type RoomId = string;

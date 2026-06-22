@@ -28,4 +28,5 @@ export interface ReceivingReturnedSignalPayload {
 
 export type DataMessage =
   | { type: "text"; text: string }
+  | { type: "file-start"; fileName: string; size: number }
   | { done: true; fileName: string };

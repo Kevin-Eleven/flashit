@@ -4,15 +4,33 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useRouter } from "next/navigation";
+import toast from "react-hot-toast";
 
-// Pure entry form: collect a code and hand off to /share/[roomId], which owns
-// the connection. No socket/peer logic lives here anymore.
+// Pure entry form: validate the code points at a live room, then hand off to
+// /share/[roomId], which owns the connection. No socket/peer logic lives here.
 export default function ReceivePage() {
   const router = useRouter();
   const [roomId, setRoomId] = useState<string>("");
+  const [checking, setChecking] = useState(false);
 
-  function handleJoin() {
-    if (roomId.length !== 6) return;
+  async function handleJoin() {
+    if (roomId.length !== 6 || checking) return;
+    setChecking(true);
+    const base =
+      process.env.NEXT_PUBLIC_SIGNALING_URL || "http://localhost:8000";
+    try {
+      const res = await fetch(`${base}/room/${roomId}`);
+      const data = (await res.json()) as { exists: boolean };
+      if (!data.exists) {
+        toast.error("No active session found for that code");
+        setChecking(false);
+        return;
+      }
+    } catch {
+      toast.error("Couldn't reach the server. Try again.");
+      setChecking(false);
+      return;
+    }
     router.push(`/share/${roomId}`);
   }
 
@@ -75,12 +93,12 @@ export default function ReceivePage() {
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            disabled={roomId.length !== 6}
+            disabled={roomId.length !== 6 || checking}
             onClick={handleJoin}
             className="w-full mt-6 flex items-center justify-center gap-2 px-8 py-4 bg-primary text-primary-foreground rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
           >
-            <span>Join Session</span>
-            <ArrowRight className="w-4 h-4" />
+            <span>{checking ? "Checking…" : "Join Session"}</span>
+            {!checking && <ArrowRight className="w-4 h-4" />}
           </motion.button>
         </motion.div>
 

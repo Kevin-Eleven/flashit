@@ -18,6 +18,7 @@ import {
   Clock,
 } from "lucide-react";
 import type Peer from "simple-peer";
+import { showSaveFilePicker } from "native-file-system-adapter";
 import { getSocket, disconnectSocket } from "@/utils/socket";
 import { createPeer, getPeer, destroyPeer } from "@/utils/peer";
 import type {
@@ -49,6 +50,14 @@ export default function ShareClient({ roomId }: { roomId: string }) {
     useState<ConnectionStatus>("waiting");
   const [gotFile, setGotFile] = useState(false);
   const [receivedFileName, setReceivedFileName] = useState("");
+
+  // Live progress of the file currently being received (null when idle).
+  const [receiveProgress, setReceiveProgress] = useState<number | null>(null);
+  const [receivingFileName, setReceivingFileName] = useState("");
+  const receiveRef = useRef<{ total: number; received: number }>({
+    total: 0,
+    received: 0,
+  });
 
   const [fileProgress, setFileProgress] = useState<Record<number, number>>({});
   // Only one file may transfer at a time — the data channel and the receiver's
@@ -169,6 +178,14 @@ export default function ShareClient({ roomId }: { roomId: string }) {
         if ("done" in parsed && parsed.done) {
           setReceivedFileName(parsed.fileName);
           setGotFile(true);
+          setReceiveProgress(null);
+          return;
+        }
+        if ("type" in parsed && parsed.type === "file-start") {
+          receiveRef.current = { total: parsed.size, received: 0 };
+          setReceivingFileName(parsed.fileName);
+          setReceiveProgress(0);
+          setGotFile(false);
           return;
         }
         if ("type" in parsed && parsed.type === "text") {
@@ -184,7 +201,14 @@ export default function ShareClient({ roomId }: { roomId: string }) {
           return;
         }
       } catch {
-        // binary chunk — falls through to the worker
+        // binary chunk — track progress, then hand off to the worker
+        const r = receiveRef.current;
+        if (r.total > 0) {
+          r.received += (data as Buffer).byteLength;
+          setReceiveProgress(
+            Math.min(100, Math.round((r.received / r.total) * 100)),
+          );
+        }
       }
       worker.postMessage(data);
     });
@@ -195,15 +219,29 @@ export default function ShareClient({ roomId }: { roomId: string }) {
     const worker = workerRef.current;
     if (!worker) return;
 
+    const fileName = receivedFileName;
     worker.postMessage("download");
     worker.addEventListener(
       "message",
-      (event) => {
+      async (event: MessageEvent<Blob>) => {
         const blob = event.data;
+        // Prefer streaming to a user-chosen location (real Save dialog,
+        // ponyfilled across browsers, no object-URL leak).
+        try {
+          const handle = await showSaveFilePicker({ suggestedName: fileName });
+          const writable = await handle.createWritable();
+          await blob.stream().pipeTo(writable);
+          toast.success(`Saved ${fileName}`);
+          return;
+        } catch (err) {
+          // User dismissed the picker — don't fall through to an auto-download.
+          if (err instanceof Error && err.name === "AbortError") return;
+          // Otherwise (e.g. unsupported) fall back to a plain anchor download.
+        }
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = receivedFileName;
+        a.download = fileName;
         a.click();
         setTimeout(() => URL.revokeObjectURL(url), 10000);
       },
@@ -230,6 +268,14 @@ export default function ShareClient({ roomId }: { roomId: string }) {
     const CHUNK_SIZE = 64 * 1024;
     const BUFFER_THRESHOLD = 1 * 1024 * 1024;
     let offset = 0;
+
+    // Announce the transfer so the receiver can show real progress.
+    const startMsg: DataMessage = {
+      type: "file-start",
+      fileName: file.name,
+      size: file.size,
+    };
+    peer.send(JSON.stringify(startMsg));
 
     try {
       while (offset < file.size) {
@@ -452,14 +498,44 @@ export default function ShareClient({ roomId }: { roomId: string }) {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.2 }}
-          className="flex items-center gap-2"
+          className="flex items-center gap-2 pr-7"
         >
           <div className={`w-2.5 h-2.5 rounded-full ${statusConfig.color}`} />
-          <span className="text-[0.875rem] text-muted-foreground">
+          <span className="text-[0.875rem] text-muted-foreground ">
             {statusConfig.label}
           </span>
         </motion.div>
       </div>
+
+      {/* Incoming transfer progress */}
+      <AnimatePresence>
+        {receiveProgress !== null && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="max-w-6xl mx-auto w-full mb-6 bg-card rounded-2xl p-5 border border-border"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <Download className="w-5 h-5 text-primary shrink-0" />
+                <span className="text-foreground truncate">
+                  Receiving: <strong>{receivingFileName}</strong>
+                </span>
+              </div>
+              <span className="text-[0.875rem] text-muted-foreground shrink-0 ml-3">
+                {receiveProgress}%
+              </span>
+            </div>
+            <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full bg-primary transition-all duration-150"
+                style={{ width: `${receiveProgress}%` }}
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Received file download prompt */}
       <AnimatePresence>
