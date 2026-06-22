@@ -1,69 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion } from "framer-motion";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { getSocket, disconnectSocket } from "@/utils/socket";
-import { createPeer, getPeer } from "@/utils/peer";
-import toast from "react-hot-toast";
 
-function page() {
+// Pure entry form: collect a code and hand off to /share/[roomId], which owns
+// the connection. No socket/peer logic lives here anymore.
+export default function ReceivePage() {
   const router = useRouter();
   const [roomId, setRoomId] = useState<string>("");
-  // When user clicks "Join Session":
-  const [joining, setJoining] = useState(false); // prevent multiple clicks
+
   function handleJoin() {
-    if (joining) return;
-    setJoining(true);
-
-    const socket = getSocket();
-    socket.emit("join room", roomId);
-
-    socket.on("all users", (users: string[]) => {
-      if (users.length === 0) {
-        // No one in the room — invalid code or room not created yet
-        toast.error("No one is in this room yet");
-        setJoining(false);
-        return;
-      }
-
-      // Someone is waiting — we're the initiator
-      const peer = createPeer(true);
-
-      peer.on("signal", (signal: any) => {
-        // This fires once (the OFFER) since trickle:false
-        socket.emit("sending signal", {
-          userToSignal: users[0], // ← was "usersToSignal" (typo) in your code
-          callerID: socket.id,
-          signal,
-        });
-      });
-
-      peer.on("connect", () => {
-        router.push(`/share/${roomId}`);
-      });
-    });
-
-    socket.on("receiving returned signal", (payload: any) => {
-      // Sender's answer arrives — feed it to our peer to complete handshake
-      getPeer()?.signal(payload.signal);
-    });
-
-    socket.on("room full", () => {
-      toast.error("Room is full or invalid");
-      setJoining(false);
-    });
+    if (roomId.length !== 6) return;
+    router.push(`/share/${roomId}`);
   }
-
-  useEffect(() => {
-    return () => {
-      const socket = getSocket();
-      socket.off("all users");
-      socket.off("receiving returned signal");
-      socket.off("room full");
-    };
-  }, []);
 
   return (
     <motion.div
@@ -115,6 +66,9 @@ function page() {
             maxLength={6}
             value={roomId}
             onChange={(e) => setRoomId(e.target.value.toUpperCase())}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleJoin();
+            }}
             className="w-full text-center text-[2rem] tracking-[0.3em] bg-background rounded-xl px-4 py-5 text-foreground placeholder:text-muted-foreground/40 border border-border focus:border-primary/40 outline-none transition-colors"
           />
 
@@ -142,5 +96,3 @@ function page() {
     </motion.div>
   );
 }
-
-export default page;

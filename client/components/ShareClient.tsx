@@ -17,10 +17,26 @@ import {
   RefreshCw,
   Clock,
 } from "lucide-react";
+import type Peer from "simple-peer";
 import { getSocket, disconnectSocket } from "@/utils/socket";
 import { createPeer, getPeer, destroyPeer } from "@/utils/peer";
+import type {
+  UserJoinedPayload,
+  ReceivingReturnedSignalPayload,
+  SendingSignalPayload,
+  ReturningSignalPayload,
+  DataMessage,
+} from "@/types/signaling";
 
 type ConnectionStatus = "waiting" | "connecting" | "connected" | "disconnected";
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const value = bytes / Math.pow(1024, i);
+  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
 
 export default function ShareClient({ roomId }: { roomId: string }) {
   const router = useRouter();
@@ -35,6 +51,9 @@ export default function ShareClient({ roomId }: { roomId: string }) {
   const [receivedFileName, setReceivedFileName] = useState("");
 
   const [fileProgress, setFileProgress] = useState<Record<number, number>>({});
+  // Only one file may transfer at a time — the data channel and the receiver's
+  // worker have no per-file framing, so concurrent sends would interleave.
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const [messages, setMessages] = useState<TextMessage[]>([]);
@@ -47,78 +66,89 @@ export default function ShareClient({ roomId }: { roomId: string }) {
   }, [messages]);
 
   useEffect(() => {
+    // /share/[roomId] is the single connection surface. Whoever lands here
+    // first waits (non-initiator); the second arrival initiates the handshake.
     const worker = new Worker("/worker.js");
     workerRef.current = worker;
 
-    const existingPeer = getPeer();
+    const socket = getSocket();
 
-    if (existingPeer) {
-      setConnectionStatus("connected");
-      attachDataHandler(existingPeer, worker);
-    } else {
-      const socket = getSocket();
-      socket.emit("join room", roomId);
-
-      socket.on("all users", (users: string[]) => {
-        if (users.length === 0) {
-          setConnectionStatus("waiting");
-          return;
-        }
-
-        setConnectionStatus("connecting");
-        const peer = createPeer(true);
-
-        peer.on("signal", (signal: any) => {
-          socket.emit("sending signal", {
-            userToSignal: users[0],
-            callerID: socket.id,
-            signal,
-          });
-        });
-
-        peer.on("connect", () => setConnectionStatus("connected"));
-        peer.on("error", () => handlePeerError());
-        peer.on("close", () => handlePeerClose());
-        attachDataHandler(peer, worker);
+    // We initiate when we join a room that already has someone in it.
+    const onAllUsers = (users: string[]) => {
+      if (users.length === 0) {
+        setConnectionStatus("waiting");
+        return;
+      }
+      setConnectionStatus("connecting");
+      const peer = createPeer(true);
+      peer.on("signal", (signal) => {
+        const payload: SendingSignalPayload = {
+          userToSignal: users[0],
+          callerID: socket.id ?? "",
+          signal,
+        };
+        socket.emit("sending signal", payload);
       });
+      wirePeer(peer, worker);
+    };
 
-      socket.on("user joined", (payload: any) => {
-        setConnectionStatus("connecting");
-        const peer = createPeer(false);
-
-        peer.on("signal", (signal: any) => {
-          socket.emit("returning signal", {
-            signal,
-            callerID: payload.callerID,
-          });
-        });
-
-        peer.on("connect", () => setConnectionStatus("connected"));
-        peer.on("error", () => handlePeerError());
-        peer.on("close", () => handlePeerClose());
-        attachDataHandler(peer, worker);
-        peer.signal(payload.signal);
+    // We answer when someone joins after us.
+    const onUserJoined = (payload: UserJoinedPayload) => {
+      setConnectionStatus("connecting");
+      const peer = createPeer(false);
+      peer.on("signal", (signal) => {
+        const reply: ReturningSignalPayload = {
+          signal,
+          callerID: payload.callerID,
+        };
+        socket.emit("returning signal", reply);
       });
+      wirePeer(peer, worker);
+      peer.signal(payload.signal);
+    };
 
-      socket.on("receiving returned signal", (payload: any) => {
-        getPeer()?.signal(payload.signal);
-      });
+    const onReturnedSignal = (payload: ReceivingReturnedSignalPayload) => {
+      getPeer()?.signal(payload.signal);
+    };
 
-      socket.on("room full", () => {
-        toast.error("Room is full");
-        router.push("/");
-      });
+    const onRoomFull = () => {
+      toast.error("Room is full");
+      router.push("/");
+    };
 
-      socket.on("user left", () => handlePeerClose());
-      socket.on("disconnect", () => setConnectionStatus("disconnected"));
-    }
+    const onUserLeft = () => handlePeerClose();
+    const onDisconnect = () => setConnectionStatus("disconnected");
+
+    socket.on("all users", onAllUsers);
+    socket.on("user joined", onUserJoined);
+    socket.on("receiving returned signal", onReturnedSignal);
+    socket.on("room full", onRoomFull);
+    socket.on("user left", onUserLeft);
+    socket.on("disconnect", onDisconnect);
+
+    socket.emit("join room", roomId);
 
     return () => {
+      socket.off("all users", onAllUsers);
+      socket.off("user joined", onUserJoined);
+      socket.off("receiving returned signal", onReturnedSignal);
+      socket.off("room full", onRoomFull);
+      socket.off("user left", onUserLeft);
+      socket.off("disconnect", onDisconnect);
       worker.terminate();
       disconnectSocket();
       destroyPeer();
     };
+    // Connection setup runs once on mount; roomId is fixed per page instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function wirePeer(peer: Peer.Instance, worker: Worker) {
+    peer.on("connect", () => setConnectionStatus("connected"));
+    peer.on("error", () => handlePeerError());
+    peer.on("close", () => handlePeerClose());
+    attachDataHandler(peer, worker);
+  }
 
   function handlePeerError() {
     setConnectionStatus("disconnected");
@@ -130,18 +160,18 @@ export default function ShareClient({ roomId }: { roomId: string }) {
     destroyPeer();
   }
 
-  function attachDataHandler(peer: any, worker: Worker) {
-    peer.on("data", (data: any) => {
+  function attachDataHandler(peer: Peer.Instance, worker: Worker) {
+    peer.on("data", (data: Buffer | string) => {
       const str =
         typeof data === "string" ? data : new TextDecoder().decode(data);
       try {
-        const parsed = JSON.parse(str);
-        if (parsed.done) {
+        const parsed = JSON.parse(str) as DataMessage;
+        if ("done" in parsed && parsed.done) {
           setReceivedFileName(parsed.fileName);
           setGotFile(true);
           return;
         }
-        if (parsed.type === "text") {
+        if ("type" in parsed && parsed.type === "text") {
           setMessages((prev) => [
             ...prev,
             {
@@ -151,9 +181,10 @@ export default function ShareClient({ roomId }: { roomId: string }) {
               fromSelf: false,
             },
           ]);
+          return;
         }
       } catch {
-        // binary chunk
+        // binary chunk — falls through to the worker
       }
       worker.postMessage(data);
     });
@@ -192,6 +223,7 @@ export default function ShareClient({ roomId }: { roomId: string }) {
 
     const abort = new AbortController();
     abortRef.current = abort;
+    setActiveIndex(index);
 
     setFileProgress((prev) => ({ ...prev, [index]: 0 }));
 
@@ -206,7 +238,9 @@ export default function ShareClient({ roomId }: { roomId: string }) {
           break;
         }
 
-        const channel = (peer as any)._channel as RTCDataChannel;
+        // simple-peer doesn't expose the underlying channel in its types.
+        const channel = (peer as unknown as { _channel: RTCDataChannel })
+          ._channel;
         if (channel.bufferedAmount >= BUFFER_THRESHOLD) {
           await new Promise<void>((resolve, reject) => {
             channel.bufferedAmountLowThreshold = BUFFER_THRESHOLD / 2;
@@ -234,7 +268,8 @@ export default function ShareClient({ roomId }: { roomId: string }) {
       }
 
       if (!abort.signal.aborted) {
-        peer.send(JSON.stringify({ done: true, fileName: file.name }));
+        const done: DataMessage = { done: true, fileName: file.name };
+        peer.send(JSON.stringify(done));
         toast.success(`Sent ${file.name}`);
       }
     } catch {
@@ -246,6 +281,7 @@ export default function ShareClient({ roomId }: { roomId: string }) {
         return next;
       });
       abortRef.current = null;
+      setActiveIndex(null);
     }
   }
 
@@ -273,7 +309,8 @@ export default function ShareClient({ roomId }: { roomId: string }) {
     const peer = getPeer();
     if (!peer) return;
 
-    peer.write(JSON.stringify({ type: "text", text }));
+    const msg: DataMessage = { type: "text", text };
+    peer.write(JSON.stringify(msg));
     setMessages((prev) => [
       ...prev,
       {
@@ -519,7 +556,7 @@ export default function ShareClient({ roomId }: { roomId: string }) {
                       {file.name}
                     </p>
                     <p className="text-[0.75rem] text-muted-foreground">
-                      {file.size}
+                      {formatBytes(file.size)}
                     </p>
                   </div>
                   <motion.button
@@ -535,7 +572,10 @@ export default function ShareClient({ roomId }: { roomId: string }) {
                         sendFile(file, index); // pass index here
                       }
                     }}
-                    disabled={!isConnected}
+                    disabled={
+                      !isConnected ||
+                      (activeIndex !== null && activeIndex !== index)
+                    }
                     className="px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-[0.75rem] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {fileProgress[index] !== undefined
