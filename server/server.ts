@@ -36,6 +36,25 @@ app.get("/room/:roomId", (req, res) => {
 type RoomId = string;
 type SocketId = string;
 
+// Validation failures fail silently to the client (no point telling a
+// malicious/buggy peer why their message was dropped), but we still want a
+// structured trail server-side for debugging.
+function logRejection(
+  event: string,
+  socketId: SocketId,
+  reason: string,
+): void {
+  console.error(
+    JSON.stringify({
+      level: "warn",
+      ts: new Date().toISOString(),
+      event,
+      socketId,
+      reason,
+    }),
+  );
+}
+
 const roomIdToSockets: Record<RoomId, SocketId[]> = {};
 const socketToRoomId: Record<SocketId, RoomId> = {};
 const roomCreatedAt: Record<RoomId, number> = {};
@@ -80,6 +99,7 @@ io.on("connection", (socket) => {
   // Per-socket rate limiting middleware
   socket.use(([event, ...args], next) => {
     if (isRateLimited(socket.id)) {
+      logRejection(event, socket.id, "rate limit exceeded");
       next(new Error("Rate limit exceeded"));
       return;
     }
@@ -87,8 +107,10 @@ io.on("connection", (socket) => {
   });
 
   socket.on("join room", (roomID) => {
-    if (typeof roomID !== "string" || roomID.length < 1 || roomID.length > 64)
+    if (typeof roomID !== "string" || roomID.length < 1 || roomID.length > 64) {
+      logRejection("join room", socket.id, "invalid roomID");
       return;
+    }
     if (roomIdToSockets[roomID]) {
       const length = roomIdToSockets[roomID].length;
       if (length === 2) {
@@ -109,14 +131,25 @@ io.on("connection", (socket) => {
   });
 
   socket.on("sending signal", (payload) => {
-    if (!payload || typeof payload.userToSignal !== "string" || !payload.signal)
+    if (
+      !payload ||
+      typeof payload.userToSignal !== "string" ||
+      !payload.signal
+    ) {
+      logRejection("sending signal", socket.id, "malformed payload");
       return;
+    }
     // Enforce same-room: target must be in the sender's room
     const roomID = socketToRoomId[socket.id];
-    if (!roomID || !roomIdToSockets[roomID]?.includes(payload.userToSignal))
+    if (!roomID || !roomIdToSockets[roomID]?.includes(payload.userToSignal)) {
+      logRejection("sending signal", socket.id, "target not in same room");
       return;
+    }
     // Reject oversized signals
-    if (JSON.stringify(payload.signal).length > 65536) return;
+    if (JSON.stringify(payload.signal).length > 65536) {
+      logRejection("sending signal", socket.id, "signal payload too large");
+      return;
+    }
 
     io.to(payload.userToSignal).emit("user joined", {
       signal: payload.signal,
@@ -125,12 +158,20 @@ io.on("connection", (socket) => {
   });
 
   socket.on("returning signal", (payload) => {
-    if (!payload || typeof payload.callerID !== "string" || !payload.signal)
+    if (!payload || typeof payload.callerID !== "string" || !payload.signal) {
+      logRejection("returning signal", socket.id, "malformed payload");
       return;
+    }
     // Enforce same-room
     const roomID = socketToRoomId[socket.id];
-    if (!roomID || !roomIdToSockets[roomID]?.includes(payload.callerID)) return;
-    if (JSON.stringify(payload.signal).length > 65536) return;
+    if (!roomID || !roomIdToSockets[roomID]?.includes(payload.callerID)) {
+      logRejection("returning signal", socket.id, "caller not in same room");
+      return;
+    }
+    if (JSON.stringify(payload.signal).length > 65536) {
+      logRejection("returning signal", socket.id, "signal payload too large");
+      return;
+    }
 
     io.to(payload.callerID).emit("receiving returned signal", {
       signal: payload.signal,

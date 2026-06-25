@@ -2,6 +2,11 @@
 
 Simple, instant peer-to-peer file and text sharing in the browser. No uploads to any server — files travel directly between devices over WebRTC data channels.
 
+**Live demo:** https://flashit-ten.vercel.app
+
+<!-- Add a short demo GIF/screenshot here once recorded, e.g.: -->
+<!-- ![FlashIt demo](docs/demo.gif) -->
+
 ---
 
 ## Table of Contents
@@ -35,6 +40,7 @@ Key properties:
 - **Peer-to-peer** — files never touch the server; they stream directly between browsers.
 - **Ephemeral** — rooms are auto-cleaned after 1 hour, no data is stored.
 - **Real-time messaging** — text chat over the same data channel alongside file transfers.
+- **QR code join** — scan the room's QR code from a phone to join without typing the 6-character code.
 - **Dark / light theme** — persisted in `localStorage`.
 - **Up to 1 GB per file** — chunked transfer with back-pressure handling.
 
@@ -77,11 +83,9 @@ The client is a Next.js 16 app located in the `client/` directory. It uses the A
 
 #### Key Components
 
-- **`ShareClient`** (`components/ShareClient.tsx`) — The main sharing UI. Handles:
-  - Establishing or reusing the WebRTC peer connection.
-  - File selection (click or drag-and-drop).
-  - Chunked file sending with progress tracking and back-pressure control.
-  - Receiving files via the Web Worker and triggering download.
+- **`ShareClient`** (`components/ShareClient.tsx`) — The main sharing UI. Composes the hooks below and renders:
+  - File selection (click or drag-and-drop) and the file list with per-file send progress.
+  - A QR code of the room URL (`qrcode.react`) shown while waiting, so a second device can join by scanning instead of typing the code.
   - Real-time text messaging over the data channel.
   - Connection status display (waiting → connecting → connected → disconnected).
 
@@ -89,10 +93,23 @@ The client is a Next.js 16 app located in the `client/` directory. It uses the A
 
 - **`ThemeProvider`** (`hooks/useTheme.tsx`) — React context that manages light/dark theme state, persists it in `localStorage`, and toggles the `dark` class on `<html>`.
 
+#### Hooks
+
+The WebRTC/signaling/file-transfer logic that used to live inline in `ShareClient.tsx` is split into three hooks under `client/hooks/`:
+
+- **`useRoomConnection.ts`** — Joins the Socket.IO room, drives the SDP offer/answer exchange, and owns the WebRTC peer + connection-status lifecycle. Calls an `onPeerReady(peer, worker)` callback once a peer is wired up.
+- **`useFileTransfer.ts`** — Owns file selection/sending (chunking, back-pressure, progress, cancellation) and file receiving (the single peer `data` listener, which also forwards text frames to `useTextMessages` and binary chunks to the Web Worker).
+- **`useTextMessages.ts`** — Owns the chat transcript and message composition/sending.
+
 #### Utilities
 
 - **`utils/socket.ts`** — Singleton Socket.IO client. Both the send and receive pages import the same `getSocket()` instance so the connection is reused across navigations.
 - **`utils/peer.ts`** — Wraps the `simple-peer` library. Manages a single `Peer.Instance` with STUN (and optional TURN) ICE servers. Provides `createPeer(initiator)`, `getPeer()`, and `destroyPeer()`.
+
+#### Error Handling
+
+- **`app/error.tsx`** — Route-level error boundary (Next.js App Router convention). Catches render/runtime errors anywhere under the root segment and shows a recovery UI instead of a blank page.
+- **`app/global-error.tsx`** — Fallback for errors thrown by the root layout itself, where `error.tsx` can't apply.
 
 #### Styling
 
@@ -204,16 +221,21 @@ flashit/
 │   ├── app/
 │   │   ├── globals.css          # Tailwind + theme CSS variables
 │   │   ├── layout.tsx           # Root layout (ThemeProvider, ToastProvider)
+│   │   ├── error.tsx            # Route-level error boundary
+│   │   ├── global-error.tsx     # Root-layout error fallback
 │   │   ├── page.tsx             # Landing page
 │   │   ├── send/page.tsx        # Room creation + waiting screen
 │   │   ├── receive/page.tsx     # Join room by code
 │   │   └── share/[roomId]/
 │   │       └── page.tsx         # Dynamic route → ShareClient
 │   ├── components/
-│   │   ├── ShareClient.tsx      # Main file/text sharing UI
+│   │   ├── ShareClient.tsx      # Main file/text sharing UI (composes the hooks below)
 │   │   └── toast-provider.tsx   # react-hot-toast setup
 │   ├── hooks/
-│   │   └── useTheme.tsx         # Light/dark theme context
+│   │   ├── useTheme.tsx         # Light/dark theme context
+│   │   ├── useRoomConnection.ts # Socket.IO signaling + WebRTC peer lifecycle
+│   │   ├── useFileTransfer.ts   # File send/receive, chunking, progress
+│   │   └── useTextMessages.ts   # Chat transcript + composition
 │   ├── public/
 │   │   └── worker.js            # Web Worker for file chunk assembly
 │   ├── types/
@@ -222,11 +244,13 @@ flashit/
 │   │   ├── peer.ts              # simple-peer wrapper
 │   │   └── socket.ts            # Socket.IO singleton
 │   ├── next.config.ts           # Security headers
+│   ├── .env.example              # Template for client env vars
 │   ├── package.json
 │   └── tsconfig.json
 │
 ├── server/                      # Signaling server
 │   ├── server.ts                # Express + Socket.IO server
+│   ├── .env.example              # Template for server env vars
 │   └── package.json
 │
 └── README.md                    # ← You are here
@@ -241,6 +265,7 @@ flashit/
 | Frontend framework  | Next.js 16 (App Router, React 19)    |
 | Styling             | Tailwind CSS v4, Framer Motion       |
 | Icons               | Lucide React                         |
+| QR codes            | qrcode.react                         |
 | Peer-to-peer        | simple-peer (WebRTC)                 |
 | Signaling transport | Socket.IO (client + server)          |
 | Server runtime      | Node.js, Express 5                   |
@@ -268,6 +293,8 @@ npm install
 ```
 
 ### Environment Variables
+
+Both `client/.env.example` and `server/.env.example` document these — copy each to `.env`/`.env.local` and fill in as needed.
 
 #### Server (`server/`)
 
