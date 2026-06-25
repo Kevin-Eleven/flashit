@@ -1,10 +1,10 @@
 name: Build & Deploy Server
 
 # ── When does this run? ──
-# Every push to main that changes files inside server/
+# Every push to master that changes files inside server/
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - "server/**"
   workflow_dispatch: # Manual trigger button in GitHub Actions UI
