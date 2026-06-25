@@ -4,8 +4,7 @@ Simple, instant peer-to-peer file and text sharing in the browser. No uploads to
 
 **Live demo:** https://flashit-ten.vercel.app
 
-<!-- Add a short demo GIF/screenshot here once recorded, e.g.: -->
-<!-- ![FlashIt demo](docs/demo.gif) -->
+![FlashIt demo](docs/demo.gif)
 
 ---
 
