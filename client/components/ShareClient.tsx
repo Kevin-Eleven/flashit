@@ -330,13 +330,14 @@ export default function ShareClient({ roomId }: { roomId: string }) {
           </div>
 
           <div className="mt-4 space-y-3 flex-1 overflow-y-auto max-h-[300px]">
-            <AnimatePresence>
+            <AnimatePresence mode="popLayout">
               {files.map((file, index) => (
                 <motion.div
-                  key={`${file.name}-${index}`}
+                  key={`${file.name}-${file.size}-${file.lastModified}`}
+                  layout
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
+                  exit={{ opacity: 0, scale: 0.92, transition: { duration: 0.18 } }}
                   className="bg-card rounded-xl p-4 shadow-sm shadow-black/5 border border-border flex items-center gap-3"
                 >
                   <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">

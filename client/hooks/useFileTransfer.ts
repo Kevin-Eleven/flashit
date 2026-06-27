@@ -173,6 +173,7 @@ export function useFileTransfer() {
         const done: DataMessage = { done: true, fileName: file.name };
         peer.send(JSON.stringify(done));
         toast.success(`Sent ${file.name}`);
+        setFiles((prev) => prev.filter((_, i) => i !== index));
       }
     } catch {
       // cancelled or error
