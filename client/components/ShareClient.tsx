@@ -414,11 +414,11 @@ export default function ShareClient({ roomId }: { roomId: string }) {
                       className={`flex items-end gap-1.5 ${msg.fromSelf ? "justify-end" : "justify-start"}`}
                     >
                       {!msg.fromSelf && (
-                        <div className="bg-emerald-500/[0.12] border border-emerald-500/20 rounded-2xl rounded-bl-sm px-4 py-2.5 max-w-[78%] group relative">
+                        <div className="bg-emerald-500/[0.12] dark:bg-emerald-500/[0.12] border border-emerald-500/25 dark:border-emerald-500/20 rounded-2xl rounded-bl-sm px-4 py-2.5 max-w-[78%] group relative">
                           <p className="text-[0.9375rem] text-foreground break-words leading-relaxed">
                             {msg.text}
                           </p>
-                          <p className="text-[0.6563rem] text-emerald-400/60 mt-1">
+                          <p className="text-[0.6563rem] text-emerald-700/60 dark:text-emerald-400/60 mt-1">
                             {msg.timestamp}
                           </p>
                           <motion.button
@@ -433,11 +433,11 @@ export default function ShareClient({ roomId }: { roomId: string }) {
                       )}
 
                       {msg.fromSelf && (
-                        <div className="bg-indigo-500/[0.15] border border-indigo-500/25 rounded-2xl rounded-br-sm px-4 py-2.5 max-w-[78%] group relative">
+                        <div className="bg-primary/[0.12] dark:bg-primary/[0.15] border border-primary/25 dark:border-primary/30 rounded-2xl rounded-br-sm px-4 py-2.5 max-w-[78%] group relative">
                           <p className="text-[0.9375rem] text-foreground break-words leading-relaxed">
                             {msg.text}
                           </p>
-                          <p className="text-[0.6563rem] text-indigo-400/60 mt-1 text-right">
+                          <p className="text-[0.6563rem] text-primary/60 dark:text-primary/70 mt-1 text-right">
                             You · {msg.timestamp}
                           </p>
                           <motion.button

@@ -16,9 +16,9 @@ export default function Home() {
     >
       {/* Subtle background shapes */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-[-10%] right-[-5%] w-[500px] h-[500px] rounded-full bg-[#EDE8DC] opacity-60 blur-3xl" />
-        <div className="absolute bottom-[-15%] left-[-10%] w-[600px] h-[600px] rounded-full bg-[#E8E2D5] opacity-50 blur-3xl" />
-        <div className="absolute top-[30%] left-[20%] w-[300px] h-[300px] rounded-full bg-[#F0EBE0] opacity-40 blur-2xl" />
+        <div className="absolute top-[-10%] right-[-5%] w-[500px] h-[500px] rounded-full bg-[#EDE8DC] dark:bg-[#3a2e20] opacity-60 dark:opacity-30 blur-3xl" />
+        <div className="absolute bottom-[-15%] left-[-10%] w-[600px] h-[600px] rounded-full bg-[#E8E2D5] dark:bg-[#2e2418] opacity-50 dark:opacity-25 blur-3xl" />
+        <div className="absolute top-[30%] left-[20%] w-[300px] h-[300px] rounded-full bg-[#F0EBE0] dark:bg-[#342a1a] opacity-40 dark:opacity-20 blur-2xl" />
       </div>
 
       <div className="relative z-10 flex flex-col items-center text-center max-w-lg">
@@ -50,7 +50,7 @@ export default function Home() {
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.97 }}
-            className="flex items-center gap-3 px-10 py-4 bg-primary text-primary-foreground rounded-full shadow-lg shadow-primary/20 cursor-pointer transition-shadow hover:shadow-xl hover:shadow-primary/30"
+            className="flex items-center gap-3 px-10 py-4 bg-primary text-primary-foreground rounded-full shadow-lg shadow-primary/25 dark:shadow-primary/20 cursor-pointer transition-shadow hover:shadow-xl hover:shadow-primary/35 dark:hover:shadow-primary/30"
             onClick={() => router.push("/send")}
           >
             <Send className="w-5 h-5" />
@@ -60,7 +60,7 @@ export default function Home() {
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.97 }}
-            className="flex items-center gap-3 px-10 py-4 bg-card text-card-foreground rounded-full shadow-lg shadow-black/5 border border-border cursor-pointer transition-shadow hover:shadow-xl"
+            className="flex items-center gap-3 px-10 py-4 bg-card text-card-foreground rounded-full shadow-lg shadow-black/5 dark:shadow-black/30 border border-border cursor-pointer transition-shadow hover:shadow-xl"
             onClick={() => router.push("/receive")}
           >
             <Download className="w-5 h-5" />

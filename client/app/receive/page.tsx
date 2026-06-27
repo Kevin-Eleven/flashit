@@ -76,7 +76,7 @@ export default function ReceivePage() {
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.4 }}
-          className="bg-card rounded-2xl p-8 shadow-md shadow-black/5 border border-border w-full"
+          className="bg-card rounded-2xl p-8 shadow-md shadow-black/5 dark:shadow-black/30 border border-border w-full"
         >
           <input
             type="text"
