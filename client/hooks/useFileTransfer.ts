@@ -18,6 +18,8 @@ export function useFileTransfer() {
   );
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const [isSendingAll, setIsSendingAll] = useState(false);
+  const stopSendAllRef = useRef(false);
 
   const [receiveProgress, setReceiveProgress] = useState<number | null>(null);
   const [receivingFileName, setReceivingFileName] = useState("");
@@ -25,8 +27,7 @@ export function useFileTransfer() {
     total: 0,
     received: 0,
   });
-  const [gotFile, setGotFile] = useState(false);
-  const [receivedFileName, setReceivedFileName] = useState("");
+  const [receivedFiles, setReceivedFiles] = useState<{ name: string; blob: Blob }[]>([]);
 
   // Single data-channel consumer: dispatches text frames to onText, handles
   // file-start/done control frames itself, and forwards binary chunks to
@@ -42,16 +43,22 @@ export function useFileTransfer() {
       try {
         const parsed = JSON.parse(str) as DataMessage;
         if ("done" in parsed && parsed.done) {
-          setReceivedFileName(parsed.fileName);
-          setGotFile(true);
           setReceiveProgress(null);
+          const fileName = parsed.fileName;
+          worker.postMessage("download");
+          worker.addEventListener(
+            "message",
+            (event: MessageEvent<Blob>) => {
+              setReceivedFiles((prev) => [...prev, { name: fileName, blob: event.data }]);
+            },
+            { once: true },
+          );
           return;
         }
         if ("type" in parsed && parsed.type === "file-start") {
           receiveRef.current = { total: parsed.size, received: 0 };
           setReceivingFileName(parsed.fileName);
           setReceiveProgress(0);
-          setGotFile(false);
           return;
         }
         if ("type" in parsed && parsed.type === "text") {
@@ -72,38 +79,24 @@ export function useFileTransfer() {
     });
   }
 
-  function handleDownload(worker: Worker | null) {
-    setGotFile(false);
-    if (!worker) return;
-
-    const fileName = receivedFileName;
-    worker.postMessage("download");
-    worker.addEventListener(
-      "message",
-      async (event: MessageEvent<Blob>) => {
-        const blob = event.data;
-        // Prefer streaming to a user-chosen location (real Save dialog,
-        // ponyfilled across browsers, no object-URL leak).
-        try {
-          const handle = await showSaveFilePicker({ suggestedName: fileName });
-          const writable = await handle.createWritable();
-          await blob.stream().pipeTo(writable);
-          toast.success(`Saved ${fileName}`);
-          return;
-        } catch (err) {
-          // User dismissed the picker — don't fall through to an auto-download.
-          if (err instanceof Error && err.name === "AbortError") return;
-          // Otherwise (e.g. unsupported) fall back to a plain anchor download.
-        }
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = fileName;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 10000);
-      },
-      { once: true },
-    );
+  async function handleDownload(file: { name: string; blob: Blob }) {
+    setReceivedFiles((prev) => prev.filter((f) => f !== file));
+    try {
+      const handle = await showSaveFilePicker({ suggestedName: file.name });
+      const writable = await handle.createWritable();
+      await file.blob.stream().pipeTo(writable);
+      toast.success(`Saved ${file.name}`);
+      return;
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return;
+    }
+    const url = URL.createObjectURL(file.blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = file.name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    toast.success(`Downloaded ${file.name}`);
   }
 
   async function sendFile(file: File, index: number) {
@@ -138,6 +131,7 @@ export function useFileTransfer() {
       while (offset < file.size) {
         if (abort.signal.aborted) {
           toast("Transfer cancelled");
+          stopSendAllRef.current = true;
           break;
         }
 
@@ -188,6 +182,30 @@ export function useFileTransfer() {
     }
   }
 
+  async function sendAll() {
+    if (isSendingAll) return;
+    // Snapshot so additions during the run don't extend the queue.
+    const snapshot = [...files];
+    if (snapshot.length === 0) return;
+    setIsSendingAll(true);
+    stopSendAllRef.current = false;
+    for (const file of snapshot) {
+      if (stopSendAllRef.current) break;
+      // Each successful send removes the file at index 0, so the next
+      // file in the snapshot slides into index 0 automatically.
+      await sendFile(file, 0);
+      // If this file was aborted (not removed), stop the queue.
+      if (abortRef.current === null && stopSendAllRef.current) break;
+    }
+    setIsSendingAll(false);
+    stopSendAllRef.current = false;
+  }
+
+  function cancelAll() {
+    stopSendAllRef.current = true;
+    abortRef.current?.abort();
+  }
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     e.preventDefault();
     const selectedFiles = e.target.files;
@@ -210,13 +228,15 @@ export function useFileTransfer() {
     fileProgress,
     activeIndex,
     abortRef,
+    isSendingAll,
     receiveProgress,
     receivingFileName,
-    gotFile,
-    receivedFileName,
+    receivedFiles,
     attachToPeer,
     handleDownload,
     sendFile,
+    sendAll,
+    cancelAll,
     handleFileSelect,
     handleDrop,
     removeFile,

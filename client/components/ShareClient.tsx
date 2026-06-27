@@ -41,7 +41,7 @@ export default function ShareClient({ roomId }: { roomId: string }) {
 
   const fileTransfer = useFileTransfer();
   const textMessages = useTextMessages();
-  const { connectionStatus, workerRef } = useRoomConnection(
+  const { connectionStatus } = useRoomConnection(
     roomId,
     (peer, worker) => fileTransfer.attachToPeer(peer, worker, textMessages.addIncoming),
   );
@@ -51,11 +51,13 @@ export default function ShareClient({ roomId }: { roomId: string }) {
     fileProgress,
     activeIndex,
     abortRef,
+    isSendingAll,
     receiveProgress,
     receivingFileName,
-    gotFile,
-    receivedFileName,
+    receivedFiles,
     sendFile,
+    sendAll,
+    cancelAll,
     handleFileSelect,
     removeFile,
   } = fileTransfer;
@@ -70,7 +72,7 @@ export default function ShareClient({ roomId }: { roomId: string }) {
     fileTransfer.handleDrop(e);
   };
 
-  const handleDownload = () => fileTransfer.handleDownload(workerRef.current);
+  const handleDownload = (file: { name: string; blob: Blob }) => fileTransfer.handleDownload(file);
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -252,31 +254,33 @@ export default function ShareClient({ roomId }: { roomId: string }) {
         )}
       </AnimatePresence>
 
-      {/* Received file download prompt */}
-      <AnimatePresence>
-        {gotFile && (
+      {/* Received files download list */}
+      <AnimatePresence mode="popLayout">
+        {receivedFiles.map((file) => (
           <motion.div
+            key={`${file.name}-${file.blob.size}`}
+            layout
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="max-w-6xl mx-auto w-full mb-6 bg-card rounded-2xl p-5 border border-border flex items-center justify-between"
+            exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.18 } }}
+            className="max-w-6xl mx-auto w-full mb-3 bg-card rounded-2xl p-5 border border-border flex items-center justify-between"
           >
-            <div className="flex items-center gap-3">
-              <Download className="w-5 h-5 text-primary" />
-              <span className="text-foreground">
-                Received: <strong>{receivedFileName}</strong>
+            <div className="flex items-center gap-3 min-w-0">
+              <Download className="w-5 h-5 text-primary shrink-0" />
+              <span className="text-foreground truncate">
+                Received: <strong>{file.name}</strong>
               </span>
             </div>
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
-              onClick={handleDownload}
-              className="px-5 py-2.5 bg-primary text-primary-foreground rounded-full text-[0.875rem] cursor-pointer"
+              onClick={() => handleDownload(file)}
+              className="px-5 py-2.5 bg-primary text-primary-foreground rounded-full text-[0.875rem] cursor-pointer shrink-0 ml-3"
             >
               Download
             </motion.button>
           </motion.div>
-        )}
+        ))}
       </AnimatePresence>
 
       {/* Main Content */}
@@ -329,7 +333,24 @@ export default function ShareClient({ roomId }: { roomId: string }) {
             />
           </div>
 
-          <div className="mt-4 space-y-3 flex-1 overflow-y-auto max-h-[300px]">
+          {files.length > 1 && (
+            <div className="mt-4 flex items-center justify-between">
+              <span className="text-[0.75rem] text-muted-foreground">
+                {files.length} files queued
+              </span>
+              <motion.button
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+                onClick={isSendingAll ? cancelAll : sendAll}
+                disabled={!isConnected}
+                className="px-4 py-1.5 rounded-full text-[0.75rem] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-colors bg-primary text-primary-foreground"
+              >
+                {isSendingAll ? "Cancel All" : "Send All"}
+              </motion.button>
+            </div>
+          )}
+
+          <div className={`${files.length > 1 ? "mt-3" : "mt-4"} space-y-3 flex-1 overflow-y-auto max-h-[300px]`}>
             <AnimatePresence mode="popLayout">
               {files.map((file, index) => (
                 <motion.div
